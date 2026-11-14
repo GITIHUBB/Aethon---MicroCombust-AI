@@ -185,12 +185,24 @@ _collection_error: Optional[str] = None
 def get_collection():
     """Open the persisted Chroma index, or ``None`` when it is unavailable."""
     global _collection, _collection_error
-    if _collection is None and _collection_error is None:
-        try:
-            _collection = chromadb.PersistentClient(path=DB_DIR).get_collection(COLLECTION)
-        except Exception as exc:  # pragma: no cover - defensive
-            _collection_error = str(exc)
-    return _collection
+    if _collection is not None:
+        return _collection
+    try:
+        client = chromadb.PersistentClient(path=DB_DIR)
+        existing = [c.name for c in client.list_collections()]
+        if COLLECTION in existing:
+            _collection = client.get_collection(COLLECTION)
+        elif "microcombust_papers" in existing:
+            _collection = client.get_collection("microcombust_papers")
+        elif existing:
+            _collection = client.get_collection(existing[0])
+        else:
+            _collection = client.get_or_create_collection(COLLECTION)
+        _collection_error = None
+        return _collection
+    except Exception as exc:  # pragma: no cover - defensive
+        _collection_error = str(exc)
+        return None
 
 
 def similarity_search(question: str, k: int = MAX_PASSAGES):
@@ -304,7 +316,13 @@ def _cross_encoder_ranks(query: str, docs: list) -> Optional[list[int]]:
             CrossEncoder = getattr(
                 importlib.import_module("sentence_transformers"), "CrossEncoder"
             )
-            _cross_encoder = CrossEncoder(CROSS_ENCODER)
+            # Use local_files_only to prevent network hangs when offline/sandboxed
+            try:
+                _cross_encoder = CrossEncoder(CROSS_ENCODER, local_files_only=True)
+            except Exception:
+                # If model is not cached locally, immediately fail so lexical ranking takes over
+                _cross_encoder_failed = True
+                return None
         except Exception:
             _cross_encoder_failed = True
             return None
@@ -506,46 +524,57 @@ def _settings_block(
     )
 
 
-# The persona contract. Deliberately a module-level constant so it is obvious
-# (and testable) that every request - combustion physics, general trivia, small
-# talk or a polite decline - is generated from one identical instruction.
-# Query-type-specific formatting rules are absent on purpose: rules like
-# "casual replies get 2-4 sentences" or "science replies stay under 300 words"
-# are what made the two kinds of answer read like different assistants.
-_PERSONA_INSTRUCTION = """You are a NASA Microgravity Fire Safety Expert. Synthesize an answer to the user query based ONLY on the provided NASA paper chunks. If the answer is not present, state that additional research is required. At the end of your response, explicitly reference the source papers."""
+# The persona contract with rigorous guardrails for domain lock, scientific tone, and markdown/LaTeX structure.
+_PERSONA_INSTRUCTION = """You are AETHON, the expert NASA Microgravity Combustion & Spacecraft Fire Safety AI platform.
 
+CORE OPERATIONAL GUARDRAILS & INSTRUCTIONS:
+1. DOMAIN LOCK & RETRIEVAL STRICTNESS:
+   - Your answers MUST be strictly anchored to the provided NASA technical papers and microgravity combustion experiment documentation.
+   - Do NOT extrapolate, speculate, or hallucinate findings, numerical values, or kinetics not corroborated by the retrieved literature.
+   - If the attached passages do not contain sufficient evidence to answer the question, or if no relevant passages were retrieved, you MUST explicitly and gracefully state:
+     "The current indexed NASA microgravity research papers do not contain sufficient empirical data to address this specific inquiry. Additional experimental investigation (e.g., via BASS, FLEX, SoFIE, or ACME datasets) is required."
+     Never attempt to fabricate answers from ungrounded general assumptions.
+   - When citing claims, you MUST provide inline citations strictly formatted as `[filename.pdf p.X]` directly referencing the retrieved source passages.
+
+2. SCIENTIFIC TONE & PRECISION:
+   - Maintain an objective, highly precise, authoritative aerospace engineering and physics tone.
+   - Quantify parameters where available in NASA literature (e.g., oxygen concentration in %, ambient pressure in kPa, forced airflow velocity in cm/s, flame spread rate in mm/s, limiting oxygen index / LOI, extinction limits).
+   - Accurately distinguish the physics of microgravity (0g) flames—where natural buoyant convection is eliminated, resulting in spherical diffusion flames and oxygen transport dominated by molecular diffusion or low-speed forced ventilation—from 1g buoyant flames and lunar 0.16g regimes.
+
+3. CLEAN MARKDOWN & LATEX STRUCTURE:
+   - Format all responses using clean, well-structured GitHub-flavored Markdown.
+   - Use structured Markdown headings (e.g. `### Experimental Findings`, `### Combustion & Extinction Dynamics`, `### Spacecraft Safety Implications`) to organize complex analysis.
+   - Use concise bulleted lists (`- `) for observations, physical mechanisms, and safety criteria.
+   - Use bold formatting (`**term**`) to emphasize key physical variables, materials, and combustion modes.
+   - Format mathematical equations and chemical formulas using standard LaTeX notation, e.g., inline math `$O_2$`, `$\text{CH}_4$`, `$\text{CO}_2$`, `$\text{HO}_2$`, `$\text{H}_2\text{O}$`, or display equations `$$...$$` where appropriate.
+   - At the conclusion of your response, provide an explicit list of the referenced NASA papers and NTRS records.
+   - Return clean, standards-based Markdown only: use `- ` for bullets, `**bold**` for emphasis, `#`/`##`/`###` for headings, and `$...$`/`$$...$$` for math. Do not include extra Markdown fences, code blocks, or stray leading `#`/`*` characters in the response body.
+   - At the conclusion of your response, provide an explicit list of the referenced NASA papers and NTRS records.
+   - If the attached passages do not contain sufficient evidence to answer the question, or if no relevant passages were retrieved, you MUST explicitly and gracefully state:
+     "The current indexed NASA microgravity research papers do not contain sufficient empirical data to address this specific inquiry. Additional experimental investigation (e.g., via BASS, FLEX, SoFIE, or ACME datasets) is required."
+     Never attempt to fabricate answers from ungrounded general assumptions.
+   - Provide inline citations in the strict format `[filename.pdf p.X]` referencing the retrieved source passages.
+
+=================================
+"""
 
 def _system_instruction(
     gravity_filter: Optional[str],
     settings_block: Optional[str] = None,
 ) -> str:
-    """One system instruction, byte-identical in voice for every query type.
-
-    ``_PERSONA_INSTRUCTION`` owns the tone. Everything appended below it is
-    factual state (dashboard controls) or retrieval plumbing (how to treat
-    attached passages) - never a competing rule about how a reply should be
-    shaped, so there is nothing here that can push a science answer into a
-    different format from a casual one.
-    """
-    gravity = (gravity_filter or "").strip() or "not specified"
+    """One unified system instruction with strict domain guardrails."""
+    gravity = (gravity_filter or "").strip() or "0g (Microgravity)"
     parts = [
         _PERSONA_INSTRUCTION,
         "",
-        "Dashboard context:",
-        f"- Gravity mode selected: {gravity}.",
-        "- The oxygen / pressure / airflow sliders and 'RUN SIMULATION & RANK "
-        "RISK' drive a ranking heuristic over NASA data rather than a physics "
-        "simulation, so describe that output as an estimate.",
+        "ACTIVE TELEMETRY & SYSTEM STATE:",
+        f"- Active Gravity Environment: {gravity}.",
+        "- The oxygen concentration, pressure, and airflow sliders provide telemetry for flammability risk estimation heuristic, not an active CFD simulation.",
         "",
-        "Retrieved context:",
-        "- PASSAGES may be attached to the user's message. When they answer the "
-        "question, use them as your source and cite inline like "
-        "[19930010989.pdf p.202] - keeping this same voice and formatting as "
-        "everything else.",
-        "- When they do not answer the question, ignore them instead of forcing "
-        "a citation.",
-        "- When none are attached, state that additional research is required "
-        "rather than answering from general knowledge.",
+        "RETRIEVAL PROTOCOL & CITATION RULES:",
+        "- NASA technical paper passages may be attached below. Use them as your authoritative evidence base.",
+        "- Anchor every factual claim to the attached passages, citing inline strictly as `[filename.pdf p.X]`.",
+        "- When no passages are attached, or when they do not answer the prompt, strictly enforce the Domain Lock guardrail and gracefully decline to speculate.",
     ]
     if settings_block:
         parts.extend(["", settings_block])
@@ -553,20 +582,20 @@ def _system_instruction(
 
 
 def _user_turn(question: str, context_text: str) -> str:
-    """The current turn: the user's message, plus passages when retrieval found any.
-
-    The question is always first and unframed, so a casual or general-knowledge
-    message reaches Gemini completely bare - identical to how it arrives when
-    nothing was retrieved. Passages are presented as optional source material
-    rather than as a cue to switch into a formal answer format.
-    """
+    """The current turn: user query plus attached passages when retrieved."""
     passages = context_text.strip()
     if not passages:
-        return question
+        return (
+            f"User Query: {question}\n\n"
+            "[Context Retrieval: No matching NASA technical paper passages were found above the relevance threshold in the ChromaDB index for this query. "
+            "Adhere strictly to the Domain Lock guardrail.]"
+        )
     return (
-        f"{question}\n\n"
-        "Retrieved passages (use these only if they actually answer the "
-        "question above):\n" + passages
+        f"User Query: {question}\n\n"
+        "Retrieved NASA Technical Passages:\n"
+        f"{passages}\n\n"
+        "Instructions: Synthesize a scientific answer strictly grounded in the above NASA passages. "
+        "Include inline citations `[filename.pdf p.X]` and format with clean Markdown and LaTeX."
     )
 
 

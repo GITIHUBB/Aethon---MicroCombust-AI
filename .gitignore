@@ -7,4 +7,4 @@ microcombust-ui/.next/
 *.log
 __pycache__/
 .env
-!chroma_db/*.sqlite3
+!chroma_db/*.sqlite3papers/*.pdf

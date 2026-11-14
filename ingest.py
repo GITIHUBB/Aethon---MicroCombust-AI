@@ -1,73 +1,51 @@
 import os
-from pypdf import PdfReader
-import chromadb
-from sentence_transformers import SentenceTransformer
+from langchain_community.document_loaders import TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
 
-PAPERS_DIR = "papers"
-DB_PATH = "chroma_db"
+def ingest_psi_metadata():
+    papers_dir = "papers"
+    docs = []
 
-def run_ingestion():
-    print("Initializing ChromaDB and embedding model...")
-    client = chromadb.PersistentClient(path=DB_PATH)
-    # Using a robust, lightweight local embedding model
-    embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-    
-    # Get or create collection
-    collection = client.get_or_create_collection(name="microcombust_papers")
-
-    pdf_files = [f for f in os.listdir(PAPERS_DIR) if f.endswith(".pdf")]
-    print(f"Found {len(pdf_files)} PDF files in '{PAPERS_DIR}/'. Starting ingestion...")
-
-    for filename in pdf_files:
-        pdf_path = os.path.join(PAPERS_DIR, filename)
-        print(f"Processing: {filename}")
-        
-        try:
-            reader = PdfReader(pdf_path)
-            full_text = ""
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    full_text += text + "\n"
-
-            if not full_text.strip():
-                print(f"  -> Warning: No text extracted from {filename} (might be image-only). Skipping.")
-                continue
-
-            # Simple chunking: split text into chunks of ~1000 characters with 200 char overlap
-            chunk_size = 1000
-            overlap = 200
-            chunks = []
-            for i in range(0, len(full_text), chunk_size - overlap):
-                chunk = full_text[i:i + chunk_size]
-                if len(chunk.strip()) > 50:  # ignore tiny trailing chunks
-                    chunks.append(chunk.strip())
-
-            if not chunks:
-                continue
-
-            print(f"  -> Generated {len(chunks)} chunks. Embedding and upserting...")
+    # Recursively walk through all unzipped PSI folders
+    for root, dirs, files in os.walk(papers_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
             
-            # Generate vector embeddings locally
-            embeddings = embedding_model.encode(chunks).tolist()
-            
-            # Prepare unique IDs and metadata for ChromaDB
-            ids = [f"{filename}_chunk_{idx}" for idx in range(len(chunks))]
-            metadatas = [{"source": filename, "chunk_index": idx} for idx in range(len(chunks))]
+            # INGESTION RULE: Keep investigation/metadata text files, skip sample templates
+            if file.startswith("i_") and file.endswith(".txt"):
+                try:
+                    loader = TextLoader(file_path, encoding="utf-8", autodetect_encoding=True)
+                    docs.extend(loader.load())
+                    print(f"Loaded investigation metadata: {file}")
+                except Exception as e:
+                    print(f"Error loading {file}: {e}")
+            elif file.endswith((".pdf", ".md")):
+                # Keep your PDF and markdown loaders here as well
+                pass
 
-            # Upsert into ChromaDB
-            collection.upsert(
-                ids=ids,
-                documents=chunks,
-                embeddings=embeddings,
-                metadatas=metadatas
-            )
-            print(f"  -> Successfully stored {filename} in ChromaDB.")
+    if not docs:
+        print("No valid investigation files found.")
+        return
 
-        except Exception as e:
-            print(f"  -> Error processing {filename}: {e}")
+    # Split into clean chunks
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+    )
+    splits = text_splitter.split_documents(docs)
+    print(f"Generated {len(splits)} chunks from investigation metadata.")
 
-    print("\nIngestion complete! All papers are now vectorized and indexed in ChromaDB.")
+    # Upsert into ChromaDB collection 'langchain'
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    vectorstore = Chroma.from_documents(
+        documents=splits,
+        embedding=embeddings,
+        persist_directory="chroma_db",
+        collection_name="langchain"
+    )
+    print("PSI investigation metadata successfully ingested into ChromaDB!")
 
 if __name__ == "__main__":
-    run_ingestion()
+    ingest_psi_metadata()
