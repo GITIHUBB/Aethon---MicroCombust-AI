@@ -33,6 +33,7 @@ class BackendQueryTests(unittest.TestCase):
         self.assertIn("clarify", response["answer"])
         self.assertNotIn("BASS", response["answer"])
         self.assertLessEqual(len(response["answer"].split(". ")), 2)
+        self.assertFalse(response["conversational"])
 
     def test_typo_normalization_and_identifier_boost(self):
         self.assertEqual(

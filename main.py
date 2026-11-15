@@ -1060,7 +1060,7 @@ def query_agent(request: QueryRequest):
         "ai_used": ai_used,
         "ai_provider": provider,
         "passages_used": len(docs),
-        "conversational": not docs,
+        "conversational": False,
     }
 
     if warning:
