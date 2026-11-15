@@ -16,12 +16,13 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  User,
   Wind,
   X,
 } from 'lucide-react';
-import MarkdownRenderer from './components/MarkdownRenderer';
-import FlameCanvas from './components/FlameCanvas';
-import { exportHtml } from './utils/exportHtml';
+import MarkdownRenderer from './MarkdownRenderer';
+import AethonLogo, { AethonMark } from './AethonLogo';
+import { exportHtml } from './exportHtml';
 
 /* ------------------------------------------------------------------ */
 /* Backend API Config & Discovery                                     */
@@ -155,7 +156,7 @@ const groundingMatch = (confidence) => {
   if (confidence == null || !Number.isFinite(Number(confidence))) return null;
   const raw = Number(confidence) > 1 ? Number(confidence) / 100 : Number(confidence);
   const normalized = clamp((raw - 0.15) / 0.35, 0, 1);
-  const score = Math.round(70 + 28 * normalized ** 0.75);
+  const score = Math.round(70 + 28 * normalized);
   const tier =
     score >= 88
       ? { label: 'High Grounding', classes: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' }
@@ -166,8 +167,22 @@ const groundingMatch = (confidence) => {
 };
 const pct = (confidence) => groundingMatch(confidence)?.score ?? null;
 const isGreetingQuery = (query) => {
-  const normalized = query.toLowerCase().replace(/[^\w\s]/g, '').trim();
-  return query.trim().length <= 3 || ['hi', 'hello', 'sup', 'yo', 'help'].includes(normalized);
+  const normalized = (query || '').toLowerCase().replace(/[^\w\s]/g, '').trim();
+  if (!normalized) return false;
+  if (normalized.length <= 3) return true;
+  const conversational = [
+    'hi', 'hello', 'helo', 'hlo', 'hlw', 'hey', 'heya', 'howdy',
+    'sup', 'yo', 'help', 'greetings', 'good morning', 'good afternoon',
+    'good evening', 'good day', 'whats up', 'whatsup', 'wassup', 'hiya', 'halo',
+    'ok', 'okay', 'cool', 'done', 'got it', 'thanks', 'thank you', 'thx',
+    'bye', 'byee', 'goodbye', 'see ya', 'later', 'cya', 'farewell', 'take care'
+  ];
+  if (conversational.includes(normalized)) return true;
+  if (/^h+[eai]+l+o*$/.test(normalized)) return true;
+  if (/^h+e+y+$/.test(normalized)) return true;
+  if (/^h+i+$/.test(normalized)) return true;
+  if (/^y+o+$/.test(normalized)) return true;
+  return conversational.some((g) => normalized.startsWith(`${g} `));
 };
 
 function localRank({ oxygen, pressure, airflow, gravity }) {
@@ -219,6 +234,7 @@ function normalizeAnswer(data) {
     confidence,
     question: data?.question || null,
     sources: Array.isArray(data?.retrieved_sources) ? data.retrieved_sources : [],
+    conversational: Boolean(data?.conversational),
   };
 }
 
@@ -231,21 +247,16 @@ function AerospacePanel({
   right,
   children,
   className = '',
-  accent = 'cyan', // 'cyan' | 'orange' | 'emerald'
+  accent = 'cyan', // 'cyan' | 'violet' | 'emerald'
 }) {
-  const accentBorder =
-    accent === 'orange'
-      ? 'border-t-2 border-t-orange-500/80'
-      : accent === 'emerald'
-      ? 'border-t-2 border-t-emerald-500/80'
-      : 'border-t-2 border-t-cyan-500/80';
+  const accentBorder = '';
 
   const iconBg =
-    accent === 'orange'
-      ? 'bg-orange-500/10 text-orange-400 border-orange-500/30'
+    accent === 'violet'
+      ? 'bg-violet-400/10 text-violet-300 border-violet-400/30'
       : accent === 'emerald'
       ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-      : 'bg-sky-400/10 text-sky-400 border-sky-400/30';
+      : 'bg-cyan-400/10 text-cyan-300 border-cyan-400/30';
 
   return (
     <section className={`aethon-glass ${accentBorder} ${className}`}>
@@ -274,7 +285,7 @@ function TelemetrySlider({
   max,
   step = 1,
   digits = 0,
-  accentColor = '#38BDF8',
+  accentColor = '#5EC6D9',
   onChange,
   onSlide,
 }) {
@@ -347,9 +358,9 @@ function SourceModal({ source, onClose }) {
       <div
         onClick={onClose}
         aria-hidden="true"
-        className="absolute inset-0 bg-black/80 backdrop-blur-md transition-opacity"
+        className="absolute inset-0 bg-black/75 transition-opacity"
       />
-      <div className="relative w-full max-w-2xl max-h-[85vh] flex flex-col aethon-glass border-t-2 border-t-cyan-500 z-10 shadow-2xl">
+      <div className="relative w-full max-w-2xl max-h-[85vh] flex flex-col aethon-glass z-10 shadow-2xl">
         <header className="aethon-glass-header flex-shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center flex-none">
@@ -553,6 +564,8 @@ export default function Dashboard() {
           citations: [],
           confidence: null,
           sources: [],
+          question: query,
+          conversational: true,
         },
       ]);
       setDraft('');
@@ -647,40 +660,26 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="relative min-h-screen text-slate-100 bg-[#0B0F19] selection:bg-orange-500/30">
-      {/* Background Starfield & Hardware-Accelerated Flame Cursor Canvas */}
-      <FlameCanvas gravity={gravity} flareSignal={flareSignal} />
-
-      {/* Persistent Aerospace Mission Control Header */}
-      <header className="sticky top-0 z-40 px-4 sm:px-6 py-3 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md">
+    <div className="relative min-h-screen text-slate-100 bg-[#0B0F19] selection:bg-violet-500/40">
+      {/* Persistent header */}
+      <header className="sticky top-0 z-40 px-4 sm:px-6 py-3 border-b border-[#1E2636] bg-[#0B0F19]/95">
         <div className="max-w-[1520px] mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Brand */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-500 via-amber-500 to-cyan-500 p-[1.5px] shadow-lg shadow-orange-500/20">
-              <div className="w-full h-full rounded-[10px] bg-slate-950 flex items-center justify-center">
-                <Flame className="w-5 h-5 text-orange-400" aria-hidden="true" />
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-bold text-base tracking-wider bg-gradient-to-r from-white via-slate-200 to-cyan-300 bg-clip-text text-transparent">
-                  AETHON
-                </h1>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-orange-500/40 bg-orange-500/10 text-orange-300 uppercase">
-                  NASA RAG
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 hidden sm:block">
-                Microgravity Combustion & Spacecraft Fire Safety Intelligence Platform
-              </p>
-            </div>
+            <AethonLogo
+              size={38}
+              subtitle="Microgravity Combustion & Spacecraft Fire Safety Intelligence Platform"
+            />
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-violet-400/40 bg-violet-400/10 text-violet-200 uppercase self-start mt-1">
+              NASA RAG
+            </span>
           </div>
 
           {/* Status Pills & Controls */}
           <div className="flex flex-wrap items-center gap-2 text-xs">
             {/* FastAPI Status */}
             <span
-              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-medium backdrop-blur-sm ${
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-medium ${
                 apiOnline
                   ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
                   : 'border-amber-500/40 bg-amber-500/10 text-amber-300'
@@ -694,19 +693,19 @@ export default function Dashboard() {
             </span>
 
             {/* ChromaDB Status */}
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 text-[11px] font-medium backdrop-blur-sm">
-              <Database className="w-3 h-3 text-cyan-400" aria-hidden="true" />
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-cyan-400/35 bg-cyan-400/10 text-cyan-200 text-[11px] font-medium">
+              <Database className="w-3 h-3 text-cyan-300" aria-hidden="true" />
               <span>ChromaDB: 559 Papers</span>
             </span>
 
             {/* AI Provider Status */}
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-slate-700 bg-slate-900/60 text-slate-300 text-[11px] font-medium backdrop-blur-sm">
-              <Sparkles className="w-3 h-3 text-amber-400" aria-hidden="true" />
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-slate-700 bg-slate-900/60 text-slate-300 text-[11px] font-medium">
+              <Sparkles className="w-3 h-3 text-violet-300" aria-hidden="true" />
               <span>AI: {aiProvider ? aiProvider.toUpperCase() : 'Active'}</span>
             </span>
 
             {/* Gravity Mode Selector */}
-            <div className="flex p-0.5 rounded-xl border border-slate-700/80 bg-slate-900/80 backdrop-blur-sm ml-1" role="group" aria-label="Select gravity regime">
+            <div className="flex p-0.5 rounded-xl border border-slate-700/80 bg-slate-900/80 ml-1" role="group" aria-label="Select gravity regime">
               {GRAVITY_MODES.map((g) => {
                 const active = gravity === g.value;
                 return (
@@ -717,10 +716,11 @@ export default function Dashboard() {
                       setGravity(g.value);
                       triggerFlare();
                     }}
-                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                    aria-pressed={active}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
                       active
-                        ? 'bg-gradient-to-r from-orange-500 to-amber-500 text-slate-950 font-bold shadow-md shadow-orange-500/20'
-                        : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/50'
+                        ? 'bg-violet-500/25 text-violet-100 font-semibold border border-violet-400/50'
+                        : 'border border-transparent text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
                     }`}
                   >
                     {g.label}
@@ -754,9 +754,9 @@ export default function Dashboard() {
             <AerospacePanel
               title="Telemetry & Boundary Controls"
               icon={Wind}
-              accent="orange"
+              accent="violet"
               right={
-                <span className="font-mono text-[11px] text-orange-400/90 font-medium px-2 py-0.5 rounded-md border border-orange-500/30 bg-orange-500/10">
+                <span className="font-mono text-[11px] text-violet-200 font-medium px-2 py-0.5 rounded-md border border-violet-400/30 bg-violet-400/10">
                   {gravity}
                 </span>
               }
@@ -771,7 +771,7 @@ export default function Dashboard() {
                   max={35}
                   step={0.5}
                   digits={1}
-                  accentColor="#f97316"
+                  accentColor="#7C6CF6"
                   onChange={setOxygen}
                   onSlide={triggerFlare}
                 />
@@ -785,7 +785,7 @@ export default function Dashboard() {
                   max={150}
                   step={0.1}
                   digits={1}
-                  accentColor="#38BDF8"
+                  accentColor="#5EC6D9"
                   onChange={setPressure}
                   onSlide={triggerFlare}
                 />
@@ -799,7 +799,7 @@ export default function Dashboard() {
                   max={50}
                   step={1}
                   digits={0}
-                  accentColor="#eab308"
+                  accentColor="#6F8FE8"
                   onChange={setAirflow}
                   onSlide={triggerFlare}
                 />
@@ -829,16 +829,16 @@ export default function Dashboard() {
                   type="button"
                   onClick={runSimulation}
                   disabled={runningSim}
-                  className="w-full py-3 px-4 rounded-xl font-semibold text-xs tracking-wider uppercase transition-all duration-200 flex items-center justify-center gap-2 cursor-pointer shadow-lg bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 hover:from-orange-400 hover:to-amber-500 text-slate-950 shadow-orange-500/25 hover:shadow-orange-500/40 disabled:opacity-50 disabled:cursor-wait"
+                  className="aethon-primary w-full py-3 px-4 rounded-xl font-semibold text-xs tracking-wider uppercase flex items-center justify-center gap-2 cursor-pointer"
                 >
                   {runningSim ? (
                     <>
-                      <Loader2 className="w-4 h-4 animate-spin text-slate-950" aria-hidden="true" />
+                      <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
                       Computing Boundary Kinetics…
                     </>
                   ) : (
                     <>
-                      <Play className="w-4 h-4 fill-slate-950" aria-hidden="true" />
+                      <Play className="w-4 h-4 fill-white" aria-hidden="true" />
                       Run Simulation & Rank Risk
                     </>
                   )}
@@ -866,7 +866,7 @@ export default function Dashboard() {
             <AerospacePanel
               title="Material Flammability Risk Matrix"
               icon={AlertTriangle}
-              accent="orange"
+              accent="violet"
               right={
                 <span className="font-mono text-[10px] px-2 py-0.5 rounded-full border border-slate-700 bg-slate-900/80 text-slate-400">
                   {remoteRank ? 'Backend Grounded' : 'Empirical Estimate'}
@@ -909,7 +909,7 @@ export default function Dashboard() {
                                   key={r.material}
                                   className={`p-2 rounded-lg border text-xs transition-colors ${
                                     isSelected
-                                      ? 'border-cyan-400 bg-cyan-950/40 shadow-sm shadow-cyan-500/20'
+                                      ? 'border-cyan-400 bg-cyan-950/40'
                                       : 'border-slate-800/80 bg-slate-900/60'
                                   }`}
                                 >
@@ -941,10 +941,10 @@ export default function Dashboard() {
                 {topRisk && (
                   <div className="p-3 rounded-xl border border-cyan-500/30 bg-cyan-950/20 text-xs flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <Flame className="w-4 h-4 text-orange-400 flex-none" aria-hidden="true" />
+                      <Flame className="w-4 h-4 text-slate-300 flex-none" aria-hidden="true" />
                       <span className="text-slate-300">
                         Maximum Hazard in current regime:{' '}
-                        <strong className="text-amber-300 font-semibold">{topRisk.material}</strong> (
+                        <strong className="text-slate-50 font-semibold">{topRisk.material}</strong> (
                         <span className="font-mono text-cyan-300">{Math.round(topRisk.score * 100)}/100</span>)
                       </span>
                     </div>
@@ -985,20 +985,25 @@ export default function Dashboard() {
                     >
                       {/* Avatar */}
                       <div
-                        className={`w-8 h-8 rounded-xl flex items-center justify-center flex-none font-bold text-xs ${
+                        className={`w-8 h-8 flex items-center justify-center flex-none ${
                           isUser
-                            ? 'bg-gradient-to-br from-orange-500 to-amber-500 text-slate-950 shadow-md shadow-orange-500/20'
-                            : 'border border-cyan-500/40 bg-cyan-500/10 text-cyan-300'
+                            ? 'rounded-full border border-violet-400/40 bg-slate-800 text-violet-200'
+                            : 'rounded-xl border border-slate-700 bg-slate-900'
                         }`}
+                        title={isUser ? 'You' : 'AETHON'}
                       >
-                        {isUser ? 'You' : <Flame className="w-4 h-4 text-orange-400" aria-hidden="true" />}
+                        {isUser ? (
+                          <User className="w-4 h-4" aria-label="You" />
+                        ) : (
+                          <AethonMark size={22} />
+                        )}
                       </div>
 
                       {/* Bubble */}
                       <div
-                        className={`max-w-[88%] rounded-2xl p-4 text-[13.5px] leading-relaxed transition-all shadow-md ${
+                        className={`max-w-[88%] rounded-2xl p-4 text-[13.5px] leading-relaxed ${
                           isUser
-                            ? 'bg-gradient-to-r from-orange-500/15 to-amber-500/15 border border-orange-500/35 text-slate-100 rounded-tr-sm'
+                            ? 'bg-violet-500/15 border border-violet-400/30 text-slate-100 rounded-tr-sm'
                             : isErr
                             ? 'bg-rose-500/10 border border-rose-500/40 text-rose-200 rounded-tl-sm'
                             : 'bg-slate-900/85 border border-slate-800 text-slate-200 rounded-tl-sm'
@@ -1015,7 +1020,10 @@ export default function Dashboard() {
                             />
 
                             {/* Grounded Citation & Source Chunks Accordion */}
-                            {m.id !== 'welcome' && !m.error && (
+                            {m.id !== 'welcome' &&
+                              !m.error &&
+                              !m.conversational &&
+                              !isGreetingQuery(m.question || '') && (
                               <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
                                 <div className="flex flex-wrap items-center gap-1.5">
                                   {m.sources && m.sources.length > 0 ? (
@@ -1067,7 +1075,7 @@ export default function Dashboard() {
               {/* Quick Starter Suggestions */}
               <div className="px-4 py-2 border-t border-slate-800/60 bg-slate-950/40 flex items-center gap-2 overflow-x-auto no-scrollbar flex-shrink-0">
                 <span className="text-[11px] text-slate-500 font-mono flex items-center gap-1 flex-none">
-                  <Sparkles className="w-3 h-3 text-amber-400" aria-hidden="true" /> Quick:
+                  <Sparkles className="w-3 h-3 text-violet-300" aria-hidden="true" /> Quick:
                 </span>
                 {SUGGESTED_QUERIES.map((q) => (
                   <button
@@ -1088,7 +1096,7 @@ export default function Dashboard() {
                   e.preventDefault();
                   sendQuery();
                 }}
-                className="p-3 sm:p-4 border-t border-slate-800/80 bg-slate-950/90 backdrop-blur-md flex items-center gap-2 flex-shrink-0"
+                className="p-3 sm:p-4 border-t border-slate-800/80 bg-slate-950/90 flex items-center gap-2 flex-shrink-0"
               >
                 <input
                   ref={chatInputRef}
@@ -1102,7 +1110,7 @@ export default function Dashboard() {
                 <button
                   type="submit"
                   disabled={!draft.trim() || thinking}
-                  className="px-4 py-2.5 rounded-xl font-bold text-xs tracking-wider uppercase transition-all duration-150 flex items-center gap-1.5 cursor-pointer bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-slate-950 disabled:opacity-40 disabled:cursor-not-allowed shadow-md shadow-cyan-500/20"
+                  className="px-4 py-2.5 rounded-xl font-bold text-xs tracking-wider uppercase transition-colors flex items-center gap-1.5 cursor-pointer bg-cyan-400 hover:bg-cyan-300 active:bg-cyan-500 text-slate-950 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <Send className="w-3.5 h-3.5 fill-slate-950" aria-hidden="true" />
                   <span className="hidden sm:inline">Send</span>
@@ -1127,7 +1135,7 @@ export default function Dashboard() {
                   type="checkbox"
                   checked={showAllGravity}
                   onChange={(e) => setShowAllGravity(e.target.checked)}
-                  className="rounded border-slate-700 text-orange-500 focus:ring-0 cursor-pointer"
+                  className="rounded border-slate-700 accent-violet-500 cursor-pointer"
                 />
                 <span>All Gravity Modes</span>
               </label>
@@ -1235,7 +1243,7 @@ export default function Dashboard() {
                         <td className="p-3.5 font-mono text-slate-300">{r.gravity}</td>
                         <td className="p-3.5 font-mono text-right text-slate-300">{r.o2}%</td>
                         <td className="p-3.5 font-mono text-right text-slate-300">{r.airflow} cm/s</td>
-                        <td className="p-3.5 font-mono text-right font-bold text-amber-300">
+                        <td className="p-3.5 font-mono text-right font-bold text-slate-100">
                           {r.spread.toFixed(1)}
                         </td>
                         <td className="p-3.5">

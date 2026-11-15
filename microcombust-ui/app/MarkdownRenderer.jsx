@@ -71,13 +71,13 @@ export default function MarkdownRenderer({ content, sources = [], onOpenSource }
         rehypePlugins={[rehypeKatex]}
         components={{
           h1: (props) => (
-            <h1 className="text-lg font-bold text-amber-400 mt-4 mb-2 tracking-wide border-b border-amber-500/20 pb-1 flex items-center gap-2" {...props} />
+            <h1 className="text-lg font-bold text-violet-200 mt-4 mb-2 tracking-wide border-b border-violet-400/20 pb-1 flex items-center gap-2" {...props} />
           ),
           h2: (props) => (
             <h2 className="text-[15px] font-semibold text-cyan-300 mt-3.5 mb-1.5 tracking-wide flex items-center gap-2" {...props} />
           ),
           h3: (props) => (
-            <h3 className="text-xs font-semibold text-amber-300/95 uppercase tracking-wider mt-3 mb-1 flex items-center gap-1.5" {...props} />
+            <h3 className="text-xs font-semibold text-violet-300 uppercase tracking-wider mt-3 mb-1 flex items-center gap-1.5" {...props} />
           ),
           p: (props) => (
             <p className="my-1.5 leading-relaxed text-slate-200" {...props} />
@@ -86,13 +86,13 @@ export default function MarkdownRenderer({ content, sources = [], onOpenSource }
             <ul className="my-2 space-y-1 pl-5 list-disc text-slate-300 marker:text-cyan-400/70" {...props} />
           ),
           ol: (props) => (
-            <ol className="my-2 space-y-1 pl-5 list-decimal text-slate-300 marker:text-amber-400/70" {...props} />
+            <ol className="my-2 space-y-1 pl-5 list-decimal text-slate-300 marker:text-violet-300/70" {...props} />
           ),
           li: (props) => (
             <li className="leading-relaxed pl-0.5" {...props} />
           ),
           strong: (props) => (
-            <strong className="font-semibold text-amber-200" {...props} />
+            <strong className="font-semibold text-slate-50" {...props} />
           ),
           em: (props) => (
             <em className="text-slate-300 italic" {...props} />
@@ -113,7 +113,7 @@ export default function MarkdownRenderer({ content, sources = [], onOpenSource }
             </pre>
           ),
           blockquote: (props) => (
-            <blockquote className="border-l-2 border-amber-500/70 pl-3.5 py-1.5 my-2.5 bg-amber-500/5 rounded-r-lg text-slate-300 text-xs italic" {...props} />
+            <blockquote className="border-l-2 border-violet-400/60 pl-3.5 py-1.5 my-2.5 bg-violet-400/5 rounded-r-lg text-slate-300 text-xs italic" {...props} />
           ),
           table: (props) => (
             <div className="overflow-x-auto my-3 rounded-xl border border-slate-800/80 bg-slate-950/40">
@@ -154,7 +154,7 @@ export default function MarkdownRenderer({ content, sources = [], onOpenSource }
                     );
                   }}
                   title={matched ? `Inspect ChromaDB passage for ${filename}` : `Source paper: ${filename}`}
-                  className="inline-flex items-center gap-1 mx-1 px-2 py-0.5 rounded-full border border-cyan-500/35 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 hover:text-cyan-100 font-mono text-[11px] font-medium transition-all duration-150 cursor-pointer shadow-sm align-baseline hover:border-cyan-400/80"
+                  className="inline-flex items-center gap-1 mx-1 px-2 py-0.5 rounded-full border border-cyan-500/35 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 hover:text-cyan-100 font-mono text-[11px] font-medium transition-all duration-150 cursor-pointer align-baseline hover:border-cyan-400/80"
                 >
                   <FileText className="w-3 h-3 text-cyan-400 flex-none" aria-hidden="true" />
                   <span className="truncate max-w-[200px]">{children}</span>

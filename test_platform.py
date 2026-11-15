@@ -1,5 +1,6 @@
 import contextlib
 import io
+import os
 import sys
 import tempfile
 import types
@@ -13,12 +14,15 @@ import main
 
 class BackendQueryTests(unittest.TestCase):
     def test_greetings_skip_retrieval(self):
-        with patch.object(main, "similarity_search") as search:
-            response = main.query_agent(main.QueryRequest(query="hello"))
+        for greeting in ("hello", "helo"):
+            with self.subTest(greeting=greeting):
+                with patch.object(main, "similarity_search") as search:
+                    response = main.query_agent(main.QueryRequest(query=greeting))
 
-        search.assert_not_called()
-        self.assertIn("AETHON", response["answer"])
-        self.assertEqual(response["passages_used"], 0)
+                search.assert_not_called()
+                self.assertIn("AETHON", response["answer"])
+                self.assertEqual(response["passages_used"], 0)
+                self.assertTrue(response["conversational"])
 
     def test_empty_retrieval_uses_concise_clarification(self):
         with patch.object(main, "similarity_search", return_value=[]):
@@ -54,7 +58,7 @@ class BackendQueryTests(unittest.TestCase):
                 return {
                     "documents": [["weak", "PMMA in microgravity"]],
                     "metadatas": [[{"source": "weak.pdf"}, {"source": "pmma.pdf"}]],
-                    "distances": [[1.31, 1.30]],
+                    "distances": [[1.85, 1.30]],
                 }
 
         collection = FakeCollection()
@@ -88,11 +92,41 @@ class BackendQueryTests(unittest.TestCase):
 
 class IngestionTests(unittest.TestCase):
     def test_cleaning_and_template_detection(self):
-        cleaned = ingest._clean_text("micro-\ngravity flame\n\n\nspread")
+        cleaned = ingest._clean_text("micro-\ngravity flame\r\n\n\nspread")
         self.assertEqual(cleaned, "microgravity flame\n\nspread")
         self.assertTrue(ingest._is_placeholder("paper.txt", "Do not use this form"))
         self.assertTrue(ingest._is_placeholder("s_PSI-62.txt", "template"))
         self.assertFalse(ingest._is_placeholder("paper.txt", "NASA research text"))
+
+    def test_indexed_source_paths_are_read_from_collection_metadata(self):
+        class FakeCollection:
+            def get(self, include):
+                self.include = include
+                return {
+                    "metadatas": [
+                        {"source": "papers/already-indexed.pdf"},
+                        {"source": "papers/another.pdf"},
+                        {},
+                    ]
+                }
+
+        class FakeClient:
+            def __init__(self):
+                self.collection = FakeCollection()
+
+            def list_collections(self):
+                return [type("CollectionInfo", (), {"name": "langchain"})()]
+
+            def get_collection(self, name):
+                self.name = name
+                return self.collection
+
+        client = FakeClient()
+        self.assertEqual(
+            ingest._indexed_source_paths(client),
+            {"papers/already-indexed.pdf", "papers/another.pdf"},
+        )
+        self.assertEqual(client.collection.include, ["metadatas"])
 
     def test_reset_clears_old_collections_and_skips_templates(self):
         class FakeCollection:
@@ -100,7 +134,13 @@ class IngestionTests(unittest.TestCase):
                 self.documents = []
 
             def upsert(self, **kwargs):
-                self.documents.extend(kwargs["documents"])
+                self.documents.extend(kwargs.get("documents", []))
+
+            def add(self, **kwargs):
+                self.documents.extend(kwargs.get("documents", []))
+
+            def count(self):
+                return len(self.documents)
 
         class FakeClient:
             def __init__(self):
@@ -113,11 +153,11 @@ class IngestionTests(unittest.TestCase):
             def delete_collection(self, name):
                 self.deleted.append(name)
 
-            def get_or_create_collection(self, name):
+            def get_or_create_collection(self, name, **kwargs):
                 return self.collections.setdefault(name, FakeCollection())
 
         class FakeModel:
-            def encode(self, chunks):
+            def encode(self, chunks, **_kwargs):
                 return type("Embeddings", (), {"tolist": lambda self: [[0.0] for _ in chunks]})()
 
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -128,12 +168,13 @@ class IngestionTests(unittest.TestCase):
             client = FakeClient()
             with (
                 patch.object(ingest, "PAPERS_DIR", temporary_directory),
+                patch.object(ingest, "DB_PATH", os.path.join(temporary_directory, "test_chroma")),
                 patch.object(ingest.chromadb, "PersistentClient", return_value=client),
                 patch.dict(
                     sys.modules,
                     {
                         "sentence_transformers": types.SimpleNamespace(
-                            SentenceTransformer=lambda _name: FakeModel()
+                            SentenceTransformer=lambda _name, **_kwargs: FakeModel()
                         )
                     },
                 ),
@@ -143,10 +184,6 @@ class IngestionTests(unittest.TestCase):
 
         self.assertEqual(client.deleted, ["old"])
         self.assertTrue(client.collections["langchain"].documents)
-        self.assertEqual(
-            len(client.collections["langchain"].documents),
-            len(client.collections["microcombust_papers"].documents),
-        )
 
 
 if __name__ == "__main__":

@@ -81,7 +81,7 @@ export function exportHtml(report: ExecutiveSummaryReport): void {
     .metric { padding: 14px; border-radius: 12px; background: #0b0f19; border: 1px solid #1e293b; }
     .label { display: block; color: #94a3b8; font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; }
     .value { display: block; margin-top: 5px; color: #f8fafc; font-weight: 650; }
-    .risk { color: #F97316; }
+    .risk { color: #A79BFA; }
     .answer { white-space: normal; }
     li { margin: 8px 0; }
     a { color: #38BDF8; }

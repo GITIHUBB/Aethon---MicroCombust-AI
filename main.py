@@ -155,9 +155,38 @@ QUERY_CORRECTIONS = {
     "grafity": "gravity",
     "investigaton": "investigation",
     "PMMA": "Polymethyl Methacrylate PMMA",
+    "helo": "hello",
+    "hlo": "hello",
+    "hlw": "hello",
 }
-IDENTIFIER_PATTERNS = ("PSI-62", "BASS", "UFGM", "SoFIE", "SAFFIRE", "PMMA")
-GREETINGS = frozenset({"hi", "hello", "sup", "yo", "help"})
+
+QUERY_EXPANSIONS = {
+    "slice": "SLICE Structure and Liftoff In Combustion Experiments microgravity",
+    "microgravity": "microgravity combustion flame spread",
+    "psi-62": "PSI-62 NASA microgravity combustion investigation flame spread",
+    "bass": "BASS Burning and Suppression of Solids microgravity",
+    "flex": "FLEX Flame Extinguishment Experiment microgravity",
+    "sofie": "SoFIE Solid Fuel Ignition and Extinction microgravity",
+    "saffire": "SAFFIRE Spacecraft Fire Safety microgravity",
+    "acme": "ACME Advanced Combustion via Microgravity Experiments",
+}
+
+IDENTIFIER_PATTERNS = ("PSI-62", "BASS", "UFGM", "SoFIE", "SAFFIRE", "PMMA", "SLICE", "FLEX", "ACME")
+
+GREETINGS = frozenset({
+    "hi", "hello", "helo", "hlo", "hlw", "hey", "heya", "howdy", "sup", "yo", "help",
+    "greetings", "good morning", "good afternoon", "good evening", "good day",
+    "whats up", "whatsup", "wassup", "wazzup", "hiya", "ola", "halo",
+})
+ACKNOWLEDGEMENTS = frozenset({
+    "ok", "okay", "k", "kk", "cool", "done", "got it", "gotcha", "thanks", "thank you",
+    "thx", "thnx", "ty", "great", "awesome", "understood", "perfect", "nice", "sounds good",
+    "alright", "all good",
+})
+GOODBYES = frozenset({
+    "bye", "byee", "goodbye", "see ya", "later", "cya", "farewell", "have a good one",
+    "take care", "adios",
+})
 
 
 def _normalize_query(question: str) -> str:
@@ -166,6 +195,9 @@ def _normalize_query(question: str) -> str:
         normalized = re.sub(
             rf"\b{re.escape(typo)}\b", correction, normalized, flags=re.IGNORECASE
         )
+    stripped = normalized.strip().casefold()
+    if stripped in QUERY_EXPANSIONS:
+        return QUERY_EXPANSIONS[stripped]
     return normalized
 
 
@@ -177,9 +209,38 @@ def _query_identifiers(question: str) -> list[str]:
     ]
 
 
+def _is_greeting_pattern(cleaned: str) -> bool:
+    if cleaned in GREETINGS:
+        return True
+    if re.match(r"^h+[eai]+l+o*$", cleaned):  # helo, hello, hallo, heloo, etc.
+        return True
+    if re.match(r"^h+e+y+$", cleaned):       # hey, heyy, etc.
+        return True
+    if re.match(r"^h+i+$", cleaned):         # hi, hii, etc.
+        return True
+    if re.match(r"^y+o+$", cleaned):         # yo, yoo, etc.
+        return True
+    return any(cleaned.startswith(g) for g in ("hello", "helo", "hi ", "hey ", "greetings", "howdy"))
+
+
+def _conversational_response(question: str) -> Optional[str]:
+    cleaned = re.sub(r"[^\w\s]", "", question.casefold()).strip()
+    if not cleaned:
+        return None
+    # 1. Goodbyes
+    if cleaned in GOODBYES or any(g in cleaned for g in ("goodbye", "see ya", "cya", "farewell", "take care")):
+        return "Safe travels! Feel free to return anytime you need further spacecraft combustion research or flammability analysis."
+    # 2. Acknowledgements & closure
+    if cleaned in ACKNOWLEDGEMENTS or any(a in cleaned for a in ("thank you", "thanks", "got it", "sounds good", "all good")):
+        return "You're welcome! Let me know if you need any further analysis on microgravity flame spread, material flammability, or spacecraft fire safety."
+    # 3. Greetings
+    if _is_greeting_pattern(cleaned):
+        return "Hello! I’m AETHON, your NASA microgravity combustion research assistant. What would you like to explore?"
+    return None
+
+
 def _is_greeting(question: str) -> bool:
-    normalized = re.sub(r"[^\w\s]", "", question.casefold()).strip()
-    return len(question.strip()) <= 3 or normalized in GREETINGS
+    return _conversational_response(question) is not None
 
 
 def _welcome_answer() -> str:
@@ -276,13 +337,13 @@ def similarity_search(question: str, k: int = MAX_PASSAGES):
 
 
 def confidence_of(distance: Any) -> float:
-    """Map an L2 distance between unit-length MiniLM vectors to a 0-1 score."""
+    """Map distance (L2 or cosine) to a normalized 0-1 similarity score."""
     try:
         gap = float(distance)
     except (TypeError, ValueError):
         return 0.5
-    # For unit vectors: cosine similarity = 1 - d^2 / 2.
-    return round(_clamp(1.0 - (gap * gap) / 2.0, 0.0, 1.0), 4)
+    # Normalized continuous mapping for ChromaDB distances:
+    return round(_clamp(1.0 - (gap / 2.0), 0.0, 1.0), 4)
 
 
 # --- Candidate re-ranking ----------------------------------------------------
@@ -543,9 +604,14 @@ def _settings_block(
 # Keep generated answers evidence-led with citations isolated at the end.
 _PERSONA_INSTRUCTION = """You are AETHON, a scientific assistant for NASA microgravity combustion and spacecraft fire-safety research.
 
-Use retrieved passages as evidence. Be precise, distinguish measured findings from interpretation, and do not invent facts or numerical values. If the passages do not answer the question, briefly say what information is missing and ask a useful follow-up.
+Synthesize answers strictly grounded in the retrieved NASA paper passages. Maintain a scientific, precise tone.
+Do not invent facts or numerical values. If the passages do not answer the question, state plainly that the indexed papers do not cover it.
 
-Use clear Markdown and LaTeX where helpful. Never put PDF filenames, passage tags, or inline citations in answer sentences. For evidence-based answers, end with exactly one section titled `### 📚 Referenced NASA Papers & Datasets`; list relevant paper titles there as clean Markdown links. Do not add a generic dataset list."""
+CRITICAL CITATION RULES:
+1. NEVER insert inline PDF filenames, citations, brackets, or passage tags (such as `cite:file.pdf`, `[paper.pdf]`, or `[PASSAGE 1]`) inside answer sentences.
+2. All cited source files MUST be placed strictly at the VERY END of the response under a single section titled:
+### 📚 Referenced NASA Papers & Datasets
+3. Do not include any repetitive disclaimer banners (such as "AETHON Scientific Query Console" or "Domain Lock Guardrail") or generic dataset lists."""
 
 def _system_instruction(
     gravity_filter: Optional[str],
@@ -561,7 +627,7 @@ def _system_instruction(
         "- The oxygen concentration, pressure, and airflow sliders provide telemetry for flammability risk estimation heuristic, not an active CFD simulation.",
         "",
         "RETRIEVAL AND CITATION RULES:",
-        "- Use attached paper passages as evidence and do not add inline citations or source filenames to answer sentences.",
+        "- Synthesize the technical findings without mentioning document filenames, passage numbers, or inline citations in the body text.",
         "- End evidence-based responses with one `### 📚 Referenced NASA Papers & Datasets` section.",
         "- When evidence is insufficient, respond naturally and ask the user to clarify or rephrase.",
     ]
@@ -583,19 +649,29 @@ def _user_turn(question: str, context_text: str) -> str:
         "Retrieved NASA Technical Passages:\n"
         f"{passages}\n\n"
         "Instructions: Synthesize a scientific answer strictly grounded in the above NASA passages. "
-        "Do not include inline citations or source filenames. Add one clean linked references section at the very end."
+        "Do not include inline citations or source filenames in the body sentences. Add one clean linked references section at the very end."
     )
 
 
 def _append_clean_references(answer: str, docs: list) -> str:
+    # Strip any existing references heading and inline citation tags
     answer = re.split(
         r"(?m)^#{1,6}\s*(?:📚\s*)?Referenced NASA Papers(?: & Datasets)?\s*$",
         answer,
         maxsplit=1,
     )[0]
+    # Strip inline bracketed pdf citations like [PSI-108_doc_1_flame.pdf · p.N/A] or [paper.pdf]
     answer = re.sub(r"\[[^\]\n]*\.pdf[^\]\n]*\]", "", answer, flags=re.IGNORECASE)
+    # Strip inline cite: tags like cite:file.pdf
+    answer = re.sub(r"\bcite:[^\s\)]+", "", answer, flags=re.IGNORECASE)
+    # Strip lone pdf filenames
     answer = re.sub(r"\b[\w-]+(?:_[\w-]+)*\.pdf\b", "", answer, flags=re.IGNORECASE)
+    # Strip [PASSAGE 1] tags
     answer = re.sub(r"\[PASSAGE\s+\d+\]", "", answer, flags=re.IGNORECASE)
+    # Strip repetitive dataset disclaimers if generated
+    answer = re.sub(r"\(?e\.g\.,?\s*via\s*BASS,\s*FLEX,\s*SoFIE,?\s*or\s*ACME\s*datasets\)?\.?", "", answer, flags=re.IGNORECASE)
+    # Clean up any leftover double spaces before punctuation
+    answer = re.sub(r"[ \t]+([.,;])", r"\1", answer)
     answer = re.sub(r"[ \t]+\n", "\n", answer).strip()
 
     references = []
@@ -879,12 +955,12 @@ def query_agent(request: QueryRequest):
         raise HTTPException(
             status_code=400, detail="A `question` (or `query`) field is required."
         )
-    if _is_greeting(question):
-        answer = _welcome_answer()
+    reply = _conversational_response(question)
+    if reply is not None:
         return {
             "status": "success",
-            "answer": answer,
-            "ai_answer": answer,
+            "answer": reply,
+            "ai_answer": reply,
             "citations": [],
             "confidence": None,
             "question": question,
