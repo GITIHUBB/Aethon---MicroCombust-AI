@@ -1,0 +1,20 @@
+# NASA PHYSICAL SCIENCES INFORMATICS (PSI) INVESTIGATION RECORD
+STUDY IDENTIFIER: PSI-25
+TITLE: Burning and Suppression of Solids - II (BASS-II)
+PRINCIPAL INVESTIGATOR: Sandra Olson (NASA GRC) & Paul Ferkul
+HARDWARE / FACILITY: Microgravity Science Glovebox (MSG)
+PROJECT TYPE: Microgravity Investigation (ISS)
+TARGET MATERIALS: PMMA, Nomex, Kapton, Silicone, Cotton blends
+
+## Executive Summary & Objectives
+Determine extinction limits, flame spread rates, and fuel regression in microgravity under crew-operated real-time wind tunnel conditions.
+
+## Experimental Approach & Diagnostics
+Real-time astronaut 'lab partner' operations aboard ISS to observe flame stabilization, quenching distance, and low-flow extinction boundaries.
+
+## Benchmark Parameters & Telemetry Bounds
+- Standard Atmospheric Pressure: 101.3 kPa (range 50 - 300 kPa)
+- Oxygen Concentration Bounds: 15% to 30% O2 (up to 85% O2 in CFI-G)
+- Airflow Velocity: 0 cm/s (quiescent) to 25 cm/s forced convective velocity
+- Core Physics: Radiative Extinction, Quenching Limits, Flame Spread Rate, Soot Inception
+---

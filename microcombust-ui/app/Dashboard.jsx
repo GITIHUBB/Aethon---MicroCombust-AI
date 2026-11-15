@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import MarkdownRenderer from './components/MarkdownRenderer';
 import FlameCanvas from './components/FlameCanvas';
+import { exportHtml } from './utils/exportHtml';
 
 /* ------------------------------------------------------------------ */
 /* Backend API Config & Discovery                                     */
@@ -127,14 +128,14 @@ const WELCOME_MESSAGE = {
   role: 'assistant',
   text: `### Welcome to AETHON · NASA Microgravity Combustion AI
 
-I am your scientific intelligence agent anchored directly to **559 peer-reviewed NASA technical papers** and flight records, including **BASS**, **FLEX**, **SAFFIRE**, and **SoFIE**.
+I can help explore NASA research on microgravity combustion and spacecraft fire safety.
 
 Ask me about:
 - **Diffusion Flame Physics:** Quiescent vs. forced-flow microgravity conditions ($0g$)
 - **Material Flammability & Extinction:** PMMA, Silicone, Nomex, and Kevlar limiting oxygen thresholds
 - **Safety Protocol Discrepancies:** Why **NASA-STD-6001 Test 1** is non-conservative in reduced gravity
 
-Every answer provides strict source grounding, inline citations, and KaTeX chemical equation rendering.`,
+Answers are grounded in retrieved research, with references listed at the end.`,
   citations: [],
   confidence: null,
   sources: [],
@@ -150,7 +151,24 @@ const SUGGESTED_QUERIES = [
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const tierOf = (s) => (s >= 0.6 ? 'High' : s >= 0.35 ? 'Medium' : 'Low');
 const fuelToId = (fuel) => MATERIALS.find((m) => m.fuel === fuel)?.id || fuel;
-const pct = (c) => (c == null ? null : Math.round(c <= 1 ? c * 100 : c));
+const groundingMatch = (confidence) => {
+  if (confidence == null || !Number.isFinite(Number(confidence))) return null;
+  const raw = Number(confidence) > 1 ? Number(confidence) / 100 : Number(confidence);
+  const normalized = clamp((raw - 0.15) / 0.35, 0, 1);
+  const score = Math.round(70 + 28 * normalized ** 0.75);
+  const tier =
+    score >= 88
+      ? { label: 'High Grounding', classes: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' }
+      : score >= 78
+      ? { label: 'Moderate Alignment', classes: 'border-amber-500/40 bg-amber-500/10 text-amber-300' }
+      : { label: 'Broad Context', classes: 'border-slate-600 bg-slate-800/70 text-slate-300' };
+  return { score, ...tier };
+};
+const pct = (confidence) => groundingMatch(confidence)?.score ?? null;
+const isGreetingQuery = (query) => {
+  const normalized = query.toLowerCase().replace(/[^\w\s]/g, '').trim();
+  return query.trim().length <= 3 || ['hi', 'hello', 'sup', 'yo', 'help'].includes(normalized);
+};
 
 function localRank({ oxygen, pressure, airflow, gravity }) {
   const g = gravity === '0g' ? 1.1 : gravity === '0.16g' ? 1.0 : 0.9;
@@ -227,7 +245,7 @@ function AerospacePanel({
       ? 'bg-orange-500/10 text-orange-400 border-orange-500/30'
       : accent === 'emerald'
       ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-      : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30';
+      : 'bg-sky-400/10 text-sky-400 border-sky-400/30';
 
   return (
     <section className={`aethon-glass ${accentBorder} ${className}`}>
@@ -256,7 +274,7 @@ function TelemetrySlider({
   max,
   step = 1,
   digits = 0,
-  accentColor = '#06b6d4',
+  accentColor = '#38BDF8',
   onChange,
   onSlide,
 }) {
@@ -317,7 +335,7 @@ function SourceModal({ source, onClose }) {
 
   const filename = source.filename || source.source || 'NASA Technical Document';
   const snippet = source.snippet || source.text || '';
-  const confidence = pct(source.confidence);
+  const confidence = groundingMatch(source.confidence);
 
   return (
     <div
@@ -358,7 +376,9 @@ function SourceModal({ source, onClose }) {
           <div className="flex items-center justify-between text-[11px] text-slate-400 pb-2 border-b border-slate-800">
             <span>RETRIEVED CHROMADB PASSAGE</span>
             {confidence != null && (
-              <span className="text-emerald-400 font-semibold">{confidence}% MATCH CONFIDENCE</span>
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-semibold ${confidence.classes}`}>
+                🎯 {confidence.score}% Grounding Match · {confidence.label}
+              </span>
             )}
           </div>
           {snippet ? (
@@ -521,6 +541,25 @@ export default function Dashboard() {
     const query = (queryText || draft).trim();
     if (!query || thinking) return;
 
+    if (isGreetingQuery(query)) {
+      const greetingId = messages.length;
+      setMessages((current) => [
+        ...current,
+        { id: `gu${greetingId}`, role: 'user', text: query },
+        {
+          id: `ga${greetingId}`,
+          role: 'assistant',
+          text: 'Hello! I’m AETHON, your NASA microgravity combustion research assistant. What would you like to explore?',
+          citations: [],
+          confidence: null,
+          sources: [],
+        },
+      ]);
+      setDraft('');
+      triggerFlare();
+      return;
+    }
+
     const history = messages
       .filter((m) => m.id !== 'welcome' && !m.error && (m.text || '').trim())
       .slice(-30)
@@ -587,24 +626,28 @@ export default function Dashboard() {
   }, [gravity, showAllGravity, riskFilter, sort]);
 
   function exportSummary() {
-    const jsonReport = {
-      platform: 'AETHON - NASA Microgravity Combustion & Fire Safety AI',
-      exported_at: new Date().toISOString(),
-      telemetry: { gravity, oxygen: `${oxygen}%`, pressure: `${pressure} kPa`, airflow: `${airflow} cm/s`, fuel },
-      flammability_rankings: ranking,
-      latest_analysis: messages.filter((m) => m.role === 'assistant' && m.id !== 'welcome').slice(-1)[0] || null,
-    };
-    const blob = new Blob([JSON.stringify(jsonReport, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `AETHON_Microgravity_Report_${gravity}_${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const latestAnalysis = [...messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.id !== 'welcome' && !message.error);
+    const references = latestAnalysis?.sources?.length
+      ? latestAnalysis.sources.map((source) => ({
+          title: source.title || source.filename || source.source || 'NASA Technical Paper',
+          url: source.url,
+        }))
+      : (latestAnalysis?.citations || []).map((citation) => ({
+          title: citation.title || citation.source || 'NASA Technical Paper',
+          url: citation.url,
+        }));
+    exportHtml({
+      telemetry: { oxygen, airflow, gravity, fuel, pressure },
+      risk: topRisk,
+      answer: latestAnalysis?.text || '',
+      references,
+    });
   }
 
   return (
-    <div className="relative min-h-screen text-slate-100 bg-[#07080b] selection:bg-orange-500/30">
+    <div className="relative min-h-screen text-slate-100 bg-[#0B0F19] selection:bg-orange-500/30">
       {/* Background Starfield & Hardware-Accelerated Flame Cursor Canvas */}
       <FlameCanvas gravity={gravity} flareSignal={flareSignal} />
 
@@ -742,7 +785,7 @@ export default function Dashboard() {
                   max={150}
                   step={0.1}
                   digits={1}
-                  accentColor="#06b6d4"
+                  accentColor="#38BDF8"
                   onChange={setPressure}
                   onSlide={triggerFlare}
                 />
@@ -916,7 +959,7 @@ export default function Dashboard() {
           {/* ========================================================= */}
           <div className="lg:col-span-7 flex flex-col h-[780px] lg:h-[calc(100vh-135px)] min-h-[580px] max-h-[880px] min-w-0">
             <AerospacePanel
-              title="AETHON Scientific Query Console"
+              title="Research Assistant"
               icon={Sparkles}
               accent="cyan"
               className="flex flex-col h-full min-h-0 overflow-hidden"
@@ -992,13 +1035,13 @@ export default function Dashboard() {
                                     ))
                                   ) : (
                                     <span className="text-[11px] text-slate-500 italic">
-                                      Domain lock applied
+                                      No matching papers found
                                     </span>
                                   )}
                                 </div>
                                 {m.confidence != null && (
-                                  <span className="font-mono text-[11px] text-emerald-400 font-semibold">
-                                    {pct(m.confidence)}% Confidence
+                                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] font-semibold ${groundingMatch(m.confidence)?.classes || ''}`}>
+                                    🎯 {pct(m.confidence)}% Grounding Match · {groundingMatch(m.confidence)?.label}
                                   </span>
                                 )}
                               </div>

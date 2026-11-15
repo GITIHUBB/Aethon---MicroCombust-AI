@@ -1,0 +1,20 @@
+# NASA PHYSICAL SCIENCES INFORMATICS (PSI) INVESTIGATION RECORD
+STUDY IDENTIFIER: PSI-99
+TITLE: Spacecraft Fire Experiment-II (SAFFIRE-II)
+PRINCIPAL INVESTIGATOR: David Urban (NASA GRC)
+HARDWARE / FACILITY: Cygnus Uncrewed Resupply Vehicle
+PROJECT TYPE: Microgravity Flight Demonstration
+TARGET MATERIALS: Plexiglas (PMMA), Silicone, Nomex, Kapton samples
+
+## Executive Summary & Objectives
+Evaluate flammability limits of nine distinct spacecraft materials in microgravity.
+
+## Experimental Approach & Diagnostics
+Sequential sample ignition post-ISS departure with integrated oxygen sensors, radiometers, and HD cameras.
+
+## Benchmark Parameters & Telemetry Bounds
+- Standard Atmospheric Pressure: 101.3 kPa (range 50 - 300 kPa)
+- Oxygen Concentration Bounds: 15% to 30% O2 (up to 85% O2 in CFI-G)
+- Airflow Velocity: 0 cm/s (quiescent) to 25 cm/s forced convective velocity
+- Core Physics: Radiative Extinction, Quenching Limits, Flame Spread Rate, Soot Inception
+---

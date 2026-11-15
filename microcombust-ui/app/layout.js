@@ -10,7 +10,7 @@ export const viewport = {
   initialScale: 1,
   viewportFit: "cover",
   colorScheme: "dark",
-  themeColor: "#07080b",
+  themeColor: "#0B0F19",
 };
 
 export default function RootLayout({ children }) {
@@ -18,9 +18,9 @@ export default function RootLayout({ children }) {
     <html
       lang="en"
       className="antialiased"
-      style={{ colorScheme: "dark", backgroundColor: "#07080b" }}
+      style={{ colorScheme: "dark", backgroundColor: "#0B0F19" }}
     >
-      <body className="min-h-screen bg-[#07080b] text-[#eef0ff]">{children}</body>
+      <body className="min-h-screen bg-[#0B0F19] text-[#eef0ff]">{children}</body>
     </html>
   );
 }

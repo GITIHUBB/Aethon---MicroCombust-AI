@@ -102,14 +102,13 @@ MAX_HISTORY_TURNS = 40
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 # Retrieval shape. The index stores several chunks per page (and repeats some),
-# so we pull 10 candidates, drop near-duplicates and anything barely resembling
+# so we pull 8 candidates, drop near-duplicates and anything barely resembling
 # the question, then re-rank them against the query before keeping the best few.
-MAX_PASSAGES = 3  # top-3 chunks per NASA Space Apps grounded-RAG criterion
-FETCH_K = 10  # candidates pulled from Chroma before re-ranking
-# L2 distance above which a chunk is effectively unrelated to the query.
-# confidence_of() maps 1.40 -> ~0.02 cosine similarity; off-topic probes on
-# this index scored 1.46+.
-MAX_DISTANCE = 1.40
+MAX_PASSAGES = 3
+FETCH_K = 8
+# Cosine similarity below the calibrated grounding range is not enough evidence
+# to generate an answer from the indexed papers.
+MIN_SIMILARITY = 0.15
 
 COHERE_URL = "https://api.cohere.com/v2/rerank"
 CROSS_ENCODER = "cross-encoder/ms-marco-MiniLM-L-6-v2"
@@ -150,12 +149,48 @@ def _file_name(source: Any) -> str:
     return str(source or "").replace("\\", "/").split("/")[-1]
 
 
-# --- Retrieval, not keywords, decides what is grounded ------------------------
-# There is deliberately no domain-vocabulary gate here. `similarity_search`
-# already discards anything past MAX_DISTANCE, so a greeting, small talk or an
-# off-topic question simply comes back with no passages and is answered
-# conversationally by Gemini. A keyword list could only ever guess, and the
-# guesses used to route perfectly good questions into a canned reply.
+QUERY_CORRECTIONS = {
+    "mcro": "microgravity",
+    "flm": "flame",
+    "grafity": "gravity",
+    "investigaton": "investigation",
+    "PMMA": "Polymethyl Methacrylate PMMA",
+}
+IDENTIFIER_PATTERNS = ("PSI-62", "BASS", "UFGM", "SoFIE", "SAFFIRE", "PMMA")
+GREETINGS = frozenset({"hi", "hello", "sup", "yo", "help"})
+
+
+def _normalize_query(question: str) -> str:
+    normalized = question
+    for typo, correction in QUERY_CORRECTIONS.items():
+        normalized = re.sub(
+            rf"\b{re.escape(typo)}\b", correction, normalized, flags=re.IGNORECASE
+        )
+    return normalized
+
+
+def _query_identifiers(question: str) -> list[str]:
+    return [
+        identifier
+        for identifier in IDENTIFIER_PATTERNS
+        if re.search(rf"(?<!\w){re.escape(identifier)}(?!\w)", question, re.IGNORECASE)
+    ]
+
+
+def _is_greeting(question: str) -> bool:
+    normalized = re.sub(r"[^\w\s]", "", question.casefold()).strip()
+    return len(question.strip()) <= 3 or normalized in GREETINGS
+
+
+def _welcome_answer() -> str:
+    return "Hello! I’m AETHON, your NASA microgravity combustion research assistant. What would you like to explore?"
+
+
+def _clarification_answer() -> str:
+    return (
+        "I couldn’t find a close match in the indexed papers. "
+        "Could you clarify the material, gravity level, or combustion behavior you’re asking about?"
+    )
 
 
 @asynccontextmanager
@@ -206,12 +241,13 @@ def get_collection():
 
 
 def similarity_search(question: str, k: int = MAX_PASSAGES):
-    """Return the ``k`` best chunks: fetch 10 -> filter -> de-dupe -> re-rank."""
+    """Return the ``k`` best chunks: fetch 8 -> filter -> de-dupe -> re-rank."""
     collection = get_collection()
     if collection is None:
         return []
+    normalized_question = _normalize_query(question)
     try:
-        result = collection.query(query_texts=[question], n_results=FETCH_K)
+        result = collection.query(query_texts=[normalized_question], n_results=FETCH_K)
     except Exception:
         return []
     documents = (result.get("documents") or [[]])[0]
@@ -223,7 +259,7 @@ def similarity_search(question: str, k: int = MAX_PASSAGES):
     for text, meta, dist in zip(documents, metadatas, distances):
         meta = meta or {}
         text = text or ""
-        if _as_float(dist, 99.0) > MAX_DISTANCE:
+        if confidence_of(dist) < MIN_SIMILARITY:
             continue
         # Same source + page + opening words means the passage was ingested
         # twice; keeping it twice would waste a slot on a repeat.
@@ -236,7 +272,7 @@ def similarity_search(question: str, k: int = MAX_PASSAGES):
             break
 
     # Re-rank against the query before anything reaches the prompt.
-    return rerank(question, candidates, k)
+    return rerank(normalized_question, candidates, k)
 
 
 def confidence_of(distance: Any) -> float:
@@ -362,6 +398,18 @@ def rerank(query: str, docs: list, top_k: int = MAX_PASSAGES) -> list:
         or _cross_encoder_ranks(query, docs)
         or _lexical_ranks(query, docs)
     )
+    identifiers = _query_identifiers(query)
+    if identifiers:
+        order.sort(
+            key=lambda index: not any(
+                re.search(
+                    rf"(?<!\w){re.escape(identifier)}(?!\w)",
+                    docs[index]["page_content"],
+                    re.IGNORECASE,
+                )
+                for identifier in identifiers
+            )
+        )
     return [docs[i] for i in order[:top_k]]
 
 
@@ -382,10 +430,15 @@ def source_url(source: Any) -> str:
     return f"https://ntrs.nasa.gov/search?q={quote(stem) or 'microgravity+combustion'}"
 
 
-def source_title(meta: dict, source: Any) -> str:
-    name = _file_name(source) or "NASA source"
-    page = meta.get("page_label") or meta.get("page")
-    return f"{name} (p. {page})" if page is not None else name
+def source_title(source: Any) -> str:
+    stem = os.path.splitext(_file_name(source))[0] or "NASA source"
+    if stem.isdigit():
+        name = f"NASA NTRS Record {stem}"
+    else:
+        stem = re.sub(r"^combustion-science_doc_\d+_", "", stem, flags=re.IGNORECASE)
+        name = re.sub(r"[_-]+", " ", stem).strip()
+        name = name[:1].upper() + name[1:]
+    return name
 
 
 def _primary_key(explicit: Optional[str] = None) -> Optional[str]:
@@ -422,43 +475,12 @@ def _no_key_answer() -> str:
     )
 
 
-def _passage_list(question: str, docs: list) -> str:
-    """Numbered, truncated list of the passages an answer would be grounded in."""
-    lines = [f'Closest passages to "{question}":', ""]
-    for position, doc in enumerate(docs, 1):
-        meta = doc["metadata"]
-        source = _file_name(meta.get("source")) or "unknown source"
-        page = meta.get("page_label") or meta.get("page", "N/A")
-        snippet = " ".join(str(doc["page_content"]).split())
-        if len(snippet) > 400:
-            snippet = snippet[:400].rsplit(" ", 1)[0] + "..."
-        lines.append(f"{position}. {source}, p. {page}")
-        lines.append(f"   {snippet}")
-        lines.append("")
-    lines.append("Open a citation below to read the full document on NTRS.")
-    return "\n".join(lines)
+def _preview_answer() -> str:
+    """Explain that retrieval succeeded but answer generation is offline."""
+    return "I found relevant research papers, but answer generation is currently unavailable."
 
 
-def _preview_answer(question: str, docs: list) -> str:
-    """Retrieval preview shown when no AI key is configured.
-
-    The one path where an answer cannot come from the model, because there is no
-    key to call it with - so it says so instead of imitating a reply.
-    """
-    return "\n".join(
-        [
-            "I can't write this one in my own voice yet - there's no AI key "
-            "configured, so all I have is the raw retrieval below rather than a "
-            "proper answer.",
-            "Add GROQ_API_KEY (primary) or OPENROUTER_API_KEY (backup) to `.env` "
-            "next to main.py and restart the server and I'll answer normally.",
-            "",
-            _passage_list(question, docs),
-        ]
-    )
-
-
-def _unavailable_answer(question: str, docs: list, exc: BaseException) -> str:
+def _unavailable_answer(docs: list, exc: BaseException) -> str:
     """Handed back once retries are exhausted.
 
     One voice and one shape whether or not retrieval had anything, so a science
@@ -480,13 +502,7 @@ def _unavailable_answer(question: str, docs: list, exc: BaseException) -> str:
             "backoff and it still didn't recover, so I'd rather say so than "
             "guess at an answer."
         )
-    if not docs:
-        return lead + " Give it another go in a moment."
-    return (
-        lead
-        + "\n\nHere is what I would have grounded the answer in:\n\n"
-        + _passage_list(question, docs)
-    )
+    return lead + (" Give it another go in a moment." if not docs else "")
 
 
 def _settings_block(
@@ -524,45 +540,18 @@ def _settings_block(
     )
 
 
-# The persona contract with rigorous guardrails for domain lock, scientific tone, and markdown/LaTeX structure.
-_PERSONA_INSTRUCTION = """You are AETHON, the expert NASA Microgravity Combustion & Spacecraft Fire Safety AI platform.
+# Keep generated answers evidence-led with citations isolated at the end.
+_PERSONA_INSTRUCTION = """You are AETHON, a scientific assistant for NASA microgravity combustion and spacecraft fire-safety research.
 
-CORE OPERATIONAL GUARDRAILS & INSTRUCTIONS:
-1. DOMAIN LOCK & RETRIEVAL STRICTNESS:
-   - Your answers MUST be strictly anchored to the provided NASA technical papers and microgravity combustion experiment documentation.
-   - Do NOT extrapolate, speculate, or hallucinate findings, numerical values, or kinetics not corroborated by the retrieved literature.
-   - If the attached passages do not contain sufficient evidence to answer the question, or if no relevant passages were retrieved, you MUST explicitly and gracefully state:
-     "The current indexed NASA microgravity research papers do not contain sufficient empirical data to address this specific inquiry. Additional experimental investigation (e.g., via BASS, FLEX, SoFIE, or ACME datasets) is required."
-     Never attempt to fabricate answers from ungrounded general assumptions.
-   - When citing claims, you MUST provide inline citations strictly formatted as `[filename.pdf p.X]` directly referencing the retrieved source passages.
+Use retrieved passages as evidence. Be precise, distinguish measured findings from interpretation, and do not invent facts or numerical values. If the passages do not answer the question, briefly say what information is missing and ask a useful follow-up.
 
-2. SCIENTIFIC TONE & PRECISION:
-   - Maintain an objective, highly precise, authoritative aerospace engineering and physics tone.
-   - Quantify parameters where available in NASA literature (e.g., oxygen concentration in %, ambient pressure in kPa, forced airflow velocity in cm/s, flame spread rate in mm/s, limiting oxygen index / LOI, extinction limits).
-   - Accurately distinguish the physics of microgravity (0g) flames—where natural buoyant convection is eliminated, resulting in spherical diffusion flames and oxygen transport dominated by molecular diffusion or low-speed forced ventilation—from 1g buoyant flames and lunar 0.16g regimes.
-
-3. CLEAN MARKDOWN & LATEX STRUCTURE:
-   - Format all responses using clean, well-structured GitHub-flavored Markdown.
-   - Use structured Markdown headings (e.g. `### Experimental Findings`, `### Combustion & Extinction Dynamics`, `### Spacecraft Safety Implications`) to organize complex analysis.
-   - Use concise bulleted lists (`- `) for observations, physical mechanisms, and safety criteria.
-   - Use bold formatting (`**term**`) to emphasize key physical variables, materials, and combustion modes.
-   - Format mathematical equations and chemical formulas using standard LaTeX notation, e.g., inline math `$O_2$`, `$\text{CH}_4$`, `$\text{CO}_2$`, `$\text{HO}_2$`, `$\text{H}_2\text{O}$`, or display equations `$$...$$` where appropriate.
-   - At the conclusion of your response, provide an explicit list of the referenced NASA papers and NTRS records.
-   - Return clean, standards-based Markdown only: use `- ` for bullets, `**bold**` for emphasis, `#`/`##`/`###` for headings, and `$...$`/`$$...$$` for math. Do not include extra Markdown fences, code blocks, or stray leading `#`/`*` characters in the response body.
-   - At the conclusion of your response, provide an explicit list of the referenced NASA papers and NTRS records.
-   - If the attached passages do not contain sufficient evidence to answer the question, or if no relevant passages were retrieved, you MUST explicitly and gracefully state:
-     "The current indexed NASA microgravity research papers do not contain sufficient empirical data to address this specific inquiry. Additional experimental investigation (e.g., via BASS, FLEX, SoFIE, or ACME datasets) is required."
-     Never attempt to fabricate answers from ungrounded general assumptions.
-   - Provide inline citations in the strict format `[filename.pdf p.X]` referencing the retrieved source passages.
-
-=================================
-"""
+Use clear Markdown and LaTeX where helpful. Never put PDF filenames, passage tags, or inline citations in answer sentences. For evidence-based answers, end with exactly one section titled `### 📚 Referenced NASA Papers & Datasets`; list relevant paper titles there as clean Markdown links. Do not add a generic dataset list."""
 
 def _system_instruction(
     gravity_filter: Optional[str],
     settings_block: Optional[str] = None,
 ) -> str:
-    """One unified system instruction with strict domain guardrails."""
+    """Provide retrieval, telemetry, and clean-citation instructions."""
     gravity = (gravity_filter or "").strip() or "0g (Microgravity)"
     parts = [
         _PERSONA_INSTRUCTION,
@@ -571,10 +560,10 @@ def _system_instruction(
         f"- Active Gravity Environment: {gravity}.",
         "- The oxygen concentration, pressure, and airflow sliders provide telemetry for flammability risk estimation heuristic, not an active CFD simulation.",
         "",
-        "RETRIEVAL PROTOCOL & CITATION RULES:",
-        "- NASA technical paper passages may be attached below. Use them as your authoritative evidence base.",
-        "- Anchor every factual claim to the attached passages, citing inline strictly as `[filename.pdf p.X]`.",
-        "- When no passages are attached, or when they do not answer the prompt, strictly enforce the Domain Lock guardrail and gracefully decline to speculate.",
+        "RETRIEVAL AND CITATION RULES:",
+        "- Use attached paper passages as evidence and do not add inline citations or source filenames to answer sentences.",
+        "- End evidence-based responses with one `### 📚 Referenced NASA Papers & Datasets` section.",
+        "- When evidence is insufficient, respond naturally and ask the user to clarify or rephrase.",
     ]
     if settings_block:
         parts.extend(["", settings_block])
@@ -587,15 +576,43 @@ def _user_turn(question: str, context_text: str) -> str:
     if not passages:
         return (
             f"User Query: {question}\n\n"
-            "[Context Retrieval: No matching NASA technical paper passages were found above the relevance threshold in the ChromaDB index for this query. "
-            "Adhere strictly to the Domain Lock guardrail.]"
+            "[No relevant paper passages were retrieved. Ask the user to clarify or rephrase.]"
         )
     return (
         f"User Query: {question}\n\n"
         "Retrieved NASA Technical Passages:\n"
         f"{passages}\n\n"
         "Instructions: Synthesize a scientific answer strictly grounded in the above NASA passages. "
-        "Include inline citations `[filename.pdf p.X]` and format with clean Markdown and LaTeX."
+        "Do not include inline citations or source filenames. Add one clean linked references section at the very end."
+    )
+
+
+def _append_clean_references(answer: str, docs: list) -> str:
+    answer = re.split(
+        r"(?m)^#{1,6}\s*(?:📚\s*)?Referenced NASA Papers(?: & Datasets)?\s*$",
+        answer,
+        maxsplit=1,
+    )[0]
+    answer = re.sub(r"\[[^\]\n]*\.pdf[^\]\n]*\]", "", answer, flags=re.IGNORECASE)
+    answer = re.sub(r"\b[\w-]+(?:_[\w-]+)*\.pdf\b", "", answer, flags=re.IGNORECASE)
+    answer = re.sub(r"\[PASSAGE\s+\d+\]", "", answer, flags=re.IGNORECASE)
+    answer = re.sub(r"[ \t]+\n", "\n", answer).strip()
+
+    references = []
+    seen_sources = set()
+    for doc in docs:
+        meta = doc.get("metadata") or {}
+        source = str(meta.get("source") or "")
+        if not source or source.casefold() in seen_sources:
+            continue
+        seen_sources.add(source.casefold())
+        title = source_title(source)
+        references.append(f"- [{title}]({source_url(source)})")
+    if not references:
+        return answer
+    return (
+        f"{answer}\n\n### 📚 Referenced NASA Papers & Datasets\n"
+        + "\n".join(references)
     )
 
 
@@ -811,11 +828,11 @@ def _ai_answer(
             return answer, True, "openrouter"
         except Exception as exc:
             # Backup also failed - hand back an unavailable answer.
-            ai_answer = _unavailable_answer(question, docs, exc)
+            ai_answer = _unavailable_answer(docs, exc)
             return ai_answer, False, "openrouter"
 
     # No keys configured at all.
-    ai_answer = _preview_answer(question, docs) if docs else _no_key_answer()
+    ai_answer = _preview_answer() if docs else _no_key_answer()
     return ai_answer, False, "none"
 
 
@@ -862,6 +879,23 @@ def query_agent(request: QueryRequest):
         raise HTTPException(
             status_code=400, detail="A `question` (or `query`) field is required."
         )
+    if _is_greeting(question):
+        answer = _welcome_answer()
+        return {
+            "status": "success",
+            "answer": answer,
+            "ai_answer": answer,
+            "citations": [],
+            "confidence": None,
+            "question": question,
+            "retrieved_sources": [],
+            "sources": [],
+            "gravity_filter": request.gravity_filter,
+            "ai_used": False,
+            "ai_provider": "none",
+            "passages_used": 0,
+            "conversational": True,
+        }
 
     # Validate combustion boundary conditions before retrieval
     warning = _validate_combustion_conditions(
@@ -873,9 +907,6 @@ def query_agent(request: QueryRequest):
         request.oxygen_conc, request.pressure, request.airflow, request.fuel
     )
 
-    # Retrieval runs for every message. Casual or off-topic wording simply finds
-    # nothing past the relevance floor, and an empty passage list is what marks
-    # the answer as ungrounded - no keyword gate decides what may be asked.
     docs = similarity_search(question, k=MAX_PASSAGES)
 
     retrieved_sources = []
@@ -892,7 +923,7 @@ def query_agent(request: QueryRequest):
                 "filename": _file_name(source),
                 "page": page,
                 "snippet": snippet,
-                "title": source_title(meta, source),
+                "title": source_title(source),
                 "url": source_url(source),
                 "confidence": confidence_of(doc.get("distance")),
             }
@@ -901,7 +932,7 @@ def query_agent(request: QueryRequest):
             f"\n[PASSAGE {len(citations) + 1}] {source} (page {page})\n{snippet}\n"
         )
         citations.append({
-            "title": source_title(meta, source),
+            "title": source_title(source),
             "url": source_url(source),
             "confidence": confidence_of(doc.get("distance")),
         })
@@ -913,8 +944,10 @@ def query_agent(request: QueryRequest):
     backup_key = _backup_key()
     ai_used = False
     provider = "none"
-    if primary_key is None and backup_key is None:
-        ai_answer = _preview_answer(question, docs) if docs else _no_key_answer()
+    if not docs:
+        ai_answer = _clarification_answer()
+    elif primary_key is None and backup_key is None:
+        ai_answer = _preview_answer() if docs else _no_key_answer()
     else:
         ai_answer, ai_used, provider = _ai_answer(
             question,
@@ -926,6 +959,8 @@ def query_agent(request: QueryRequest):
             settings_block,
             request.history,
         )
+    if docs:
+        ai_answer = _append_clean_references(ai_answer, docs)
 
     confidence = (
         round(sum(c["confidence"] for c in citations) / len(citations), 4)

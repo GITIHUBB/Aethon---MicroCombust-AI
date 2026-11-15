@@ -1,0 +1,20 @@
+# NASA PHYSICAL SCIENCES INFORMATICS (PSI) INVESTIGATION RECORD
+STUDY IDENTIFIER: PSI-106
+TITLE: Structure and Liftoff In Combustion Experiment (SLICE)
+PRINCIPAL INVESTIGATOR: Richard Axson (NASA GRC)
+HARDWARE / FACILITY: MSG Fan-Driven Flow Duct
+PROJECT TYPE: Microgravity Investigation (ISS)
+TARGET MATERIALS: Gaseous fuels (Methane, Ethylene, Propane)
+
+## Executive Summary & Objectives
+Investigate structure, stability, liftoff height, and soot inception of laminar co-flow diffusion flames in zero-gravity.
+
+## Experimental Approach & Diagnostics
+Flow duct burner tubes with multi-channel optical pyrometry and temperature sensors under varying co-flow velocities.
+
+## Benchmark Parameters & Telemetry Bounds
+- Standard Atmospheric Pressure: 101.3 kPa (range 50 - 300 kPa)
+- Oxygen Concentration Bounds: 15% to 30% O2 (up to 85% O2 in CFI-G)
+- Airflow Velocity: 0 cm/s (quiescent) to 25 cm/s forced convective velocity
+- Core Physics: Radiative Extinction, Quenching Limits, Flame Spread Rate, Soot Inception
+---

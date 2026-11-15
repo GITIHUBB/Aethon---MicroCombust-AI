@@ -1,51 +1,71 @@
 import os
-from langchain_community.document_loaders import TextLoader
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
-def ingest_psi_metadata():
+def ingest_all_files():
     papers_dir = "papers"
-    docs = []
+    
+    if not os.path.exists(papers_dir):
+        print(f"Directory '{papers_dir}' not found.")
+        return
 
-    # Recursively walk through all unzipped PSI folders
+    docs = []
+    print("Scanning papers directory and subfolders...")
+
     for root, dirs, files in os.walk(papers_dir):
         for file in files:
             file_path = os.path.join(root, file)
             
-            # INGESTION RULE: Keep investigation/metadata text files, skip sample templates
-            if file.startswith("i_") and file.endswith(".txt"):
-                try:
+            if file.startswith('.'):
+                continue
+                
+            try:
+                if file.endswith(".pdf"):
+                    loader = PyPDFLoader(file_path)
+                    docs.extend(loader.load())
+                    print(f"Loaded PDF: {file}")
+                elif file.endswith((".txt", ".md", ".json")):
                     loader = TextLoader(file_path, encoding="utf-8", autodetect_encoding=True)
                     docs.extend(loader.load())
-                    print(f"Loaded investigation metadata: {file}")
-                except Exception as e:
-                    print(f"Error loading {file}: {e}")
-            elif file.endswith((".pdf", ".md")):
-                # Keep your PDF and markdown loaders here as well
-                pass
+                    print(f"Loaded Text/Metadata: {file}")
+            except Exception as e:
+                print(f"Skipping unparseable file {file_path}: {e}")
 
     if not docs:
-        print("No valid investigation files found.")
+        print("No valid documents found for ingestion.")
         return
 
-    # Split into clean chunks
+    print(f"\nTotal raw document pages/files loaded: {len(docs)}")
+
+    # Split into clean chunks for RAG
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200,
+        length_function=len,
     )
     splits = text_splitter.split_documents(docs)
-    print(f"Generated {len(splits)} chunks from investigation metadata.")
+    print(f"Generated {len(splits)} total text chunks.")
 
-    # Upsert into ChromaDB collection 'langchain'
+    # Initialize embedding model and upsert into ChromaDB
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    
+    # Clear old vector database to ensure a clean slate
+    if os.path.exists("chroma_db"):
+        import shutil
+        shutil.rmtree("chroma_db")
+        print("Cleared old ChromaDB index.")
+
+    print("Embedding and storing chunks into ChromaDB (collection: 'langchain')...")
     vectorstore = Chroma.from_documents(
         documents=splits,
         embedding=embeddings,
         persist_directory="chroma_db",
         collection_name="langchain"
     )
-    print("PSI investigation metadata successfully ingested into ChromaDB!")
+    
+    print("\nIngestion complete! All investigation text files and PDFs successfully indexed.")
 
 if __name__ == "__main__":
-    ingest_psi_metadata()
+    ingest_all_files()

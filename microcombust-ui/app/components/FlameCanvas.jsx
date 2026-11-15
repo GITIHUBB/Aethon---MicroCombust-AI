@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 
-const MAX_PARTICLES = 160;
+const MAX_PARTICLES = 40;
 const SPRITE_SIZE = 64;
 
 /** Helper to pre-render radial gradient particle sprites to offscreen canvases */
@@ -85,7 +85,7 @@ export default function FlameCanvas({ gravity = '0g', flareSignal = 0 }) {
 
     const sprites = [coreSprite, flameSprite, emberSprite, cyanSprite].filter(Boolean);
 
-    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let dpr = window.devicePixelRatio || 1;
     let W = window.innerWidth;
     let H = window.innerHeight;
 
@@ -133,7 +133,7 @@ export default function FlameCanvas({ gravity = '0g', flareSignal = 0 }) {
     const handleResize = () => {
       W = window.innerWidth;
       H = window.innerHeight;
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      dpr = window.devicePixelRatio || 1;
 
       starCanvas.width = Math.round(W * dpr);
       starCanvas.height = Math.round(H * dpr);
@@ -314,13 +314,13 @@ export default function FlameCanvas({ gravity = '0g', flareSignal = 0 }) {
       <canvas
         ref={starsCanvasRef}
         aria-hidden="true"
-        className="fixed inset-0 pointer-events-none z-0"
+        className="fixed inset-0 w-full h-full pointer-events-none z-0"
         style={{ pointerEvents: 'none', userSelect: 'none' }}
       />
       <canvas
         ref={flameCanvasRef}
         aria-hidden="true"
-        className="fixed inset-0 pointer-events-none z-10"
+        className="fixed inset-0 w-full h-full pointer-events-none z-10"
         style={{ pointerEvents: 'none', userSelect: 'none' }}
       />
     </>

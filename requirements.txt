@@ -9,3 +9,4 @@ tenacity
 requests
 pypdf
 sentence-transformers
+langchain-text-splitters
